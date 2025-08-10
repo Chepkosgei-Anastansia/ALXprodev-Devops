@@ -4,7 +4,7 @@
 # Usage: ./batchProcessing-0x02.sh
 set -euo pipefail
 
-POKEMON=(Bulbasaur Ivysaur Venusaur Charmander Charmeleon)
+POKEMON=(bulbasaur ivysaur venusaur charmander charmeleon)
 API_BASE="https://pokeapi.co/api/v2/pokemon"
 ERR_FILE="errors.txt"
 UA="pokefetch/1.0"
