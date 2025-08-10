@@ -1,0 +1,103 @@
+#!/usr/bin/env bash
+# batchProcessing-0x02.sh
+# Batch process multiple Pokémon data fetches and save them to individual files.
+# Usage: ./batchProcessing-0x02.sh
+set -euo pipefail
+
+POKEMON=(Bulbasaur Ivysaur Venusaur Charmander Charmeleon)
+API_BASE="https://pokeapi.co/api/v2/pokemon"
+ERR_FILE="errors.txt"
+UA="pokefetch/1.0"
+
+BETWEEN_REQUESTS_DELAY=2   # delay between requests to avoid rate limiting 
+BASE_RETRY_BACKOFF=2           # seconds; grows as 2,4 for attempts 1,2 (then stop)
+RETRIES=3
+
+OUT_DIR="pokemon_data"
+mkdir -p "$OUT_DIR"
+
+timestamp() { date -Iseconds; }
+fetch_with_retries() {
+  local name="$1"
+  local url="$2"
+  local outfile="$3"
+  local attempts=0
+  local max_attempts=3
+  local tmp_file status preview
+
+
+  while (( attempts < max_attempts )); do
+    attempts=$((attempts+1))
+    tmp_file="$(mktemp)"
+
+    status="$(
+      curl -sS -L \
+        --connect-timeout 10 --max-time 30 \
+        -H "User-Agent: ${UA}" \
+        -w "%{http_code}" -o "$tmp_file" \
+        "$url" || echo "000"
+    )"
+
+    # Success (2xx)
+    if [[ "$status" =~ ^2 ]]; then
+      mv "$tmp_file" "$outfile"
+      echo "Saved data to ${outfile}"
+      return 0
+    fi
+    # Keep a short preview of body for logs (even on error)
+    preview="$(head -c 200 "$tmp_file" 2>/dev/null || true)"
+    rm -f "$tmp_file"
+
+    # Decide whether to retry
+    if [[ "$status" == "000" || "$status" == "429" || "$status" =~ ^5..$ ]]; then
+      if (( attempts < max_attempts )); then
+        backoff=$(( BASE_RETRY_BACKOFF * attempts ))
+        echo "Attempt ${attempts}/${max_attempts} for ${name} failed (HTTP ${status}). Retrying in ${backoff}s…"
+        sleep "$backoff"
+        continue
+      fi
+    fi
+
+    # Non-retryable (e.g., 4xx other than 429) OR out of attempts → log & give up
+    echo "[${timestamp}] ${name} failed (HTTP ${status}) ${url} | ${preview}" >> "$ERR_FILE"
+    echo "Logged error for ${name} → ${ERR_FILE}"
+    return 1
+  done
+}
+# Ensure the error log is empty before starting
+# Main loop: fetch each Pokémon
+echo "Starting batch processing of Pokémon data…"
+echo "Errors will be logged to ${ERR_FILE}"
+> "$ERR_FILE"  # clear previous errors
+
+for NAME in "${POKEMON[@]}"; do
+  lower="${NAME,,}"                # lowercase for the API and filename
+  OUT_FILE="${OUT_DIR}/${lower}.json"
+  URL="${API_BASE}/${lower}"
+
+  echo "Fetching data for ${NAME}…"
+  fetch_with_retries "$NAME" "$URL" "$OUT_FILE" || true
+  
+  # echo "Fetching data for ${NAME}…"
+  # status="$(
+  #   curl -sS -L \
+  #     --connect-timeout 10 --max-time 30 \
+  #     -H "User-Agent: ${UA}" \
+  #     -w "%{http_code}" -o "$TMP_FILE" \
+  #     "${API_BASE}/${lower}" || echo "000"
+  # )"
+
+  # if [[ "$status" =~ ^2 ]]; then
+  #   mv "$TMP_FILE" "$OUT_FILE"
+  #   echo "Saved data to ${OUT_FILE}"
+  # else
+  #   # keep a short preview of the body to help debug
+  #   preview="$(head -c 200 "$TMP_FILE" 2>/dev/null || true)"
+  #   rm -f "$TMP_FILE"
+  #   echo "[${timestamp}] ${NAME} failed (HTTP ${status}) ${API_BASE}/${lower} | ${preview}" >> "$ERR_FILE"
+  #   echo "Logged error for ${NAME} → ${ERR_FILE}"
+  # fi
+
+  # Delay between requests to reduce the chance of 429 rate limits
+  sleep "$BETWEEN_REQUESTS_DELAY"
+done
