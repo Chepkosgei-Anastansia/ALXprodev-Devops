@@ -2,21 +2,27 @@
 # data_extraction_automation-0x01.sh
 # Extract and format Pokémon data from a JSON file.
 # Usage: ./data_extraction_automation-0x01.sh [data_file]
+
 set -euo pipefail
 FILE="${1:-data.json}"
 
-jq -r '
-  # capitalize helper
-  def cap: if type=="string" and length>0
-           then (.[0:1]|ascii_upcase) + .[1:]
-           else .
-           end;
+# 1) Pull raw fields from JSON (only jq)
+name=$(jq -r '.name' "$FILE")
+height_dm=$(jq -r '.height' "$FILE")   # decimetres
+weight_hg=$(jq -r '.weight' "$FILE")   # hectograms
+types_raw=$(jq -r '[.types[].type.name] | join("/")' "$FILE")  # e.g., "electric" or "fire/flying"
 
-  .name    as $n         # e.g., "pikachu"
-  | .height as $h        # decimetres
-  | .weight as $w        # hectograms
-  | ([.types[].type.name] | map(cap) | join("/")) as $t  # e.g., "Electric"
+# 2) Capitalize the Pokémon name (use awk)
+name=$(printf "%s" "$name" | awk '{ print toupper(substr($0,1,1)) substr($0,2) }')
 
-  # Convert units: height dm→m, weight hg→kg
-  | "\(( $n|cap)) is of type \($t), weighs \(( $w/10)|tostring)kg, and is \(( $h/10)|tostring)m tall."
-' "$FILE"
+# 3) Capitalize each type segment (use sed; capitalize after start or slash)
+type=$(printf "%s" "$types_raw" | sed -E 's/(^|\/)([a-z])/\1\U\2/g')
+
+# 4) Convert units and format (use awk)
+#    height: dm -> m (one decimal), weight: hg -> kg (integer if whole, else one decimal)
+formatted_height=$(printf "%s" "$height_dm" | awk '{ v=$1/10; printf "%.1f", v }')
+formatted_weight=$(printf "%s" "$weight_hg" | awk '{ v=$1/10; if (v==int(v)) printf "%d", v; else printf "%.1f", v }')
+
+# 5) EXACT expected output line (keep this exact string)
+echo "$name is of type $type, weighs ${formatted_weight}kg, and is ${formatted_height}m tall."
+
